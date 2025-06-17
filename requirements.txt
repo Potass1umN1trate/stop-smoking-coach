@@ -1,4 +1,6 @@
 python-telegram-bot==20.0b0
 apscheduler
-openai
+# openai
 aiosqlite
+nest_asyncio
+requests

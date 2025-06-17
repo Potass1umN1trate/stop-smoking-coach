@@ -1,19 +1,33 @@
 import os
 import json
-from openai import OpenAI
+import requests
+import re
 
 OPENROUTER_API_KEY = os.environ.get('OPENROUTER_API_KEY')
 MODEL_NAME = "deepseek/deepseek-r1:free"
+REFERER = "https://yourdomain.com"  # Optional, can be blank or set to your own site
+TITLE = "StopSmokingCoach"          # Optional
 
-client = OpenAI(
-    base_url="https://openrouter.ai/api/v1",
-    api_key=OPENROUTER_API_KEY,
-)
-
-async def generate_motivations_bulk(count: int):
+def extract_json_from_markdown(content: str) -> str:
     """
-    Generate motivational messages: count per hardness (easy/medium/hard).
-    Returns dict: {"easy": [...], "medium": [...], "hard": [...]}
+    Strips markdown code fences (like ```json ... ```) from LLM output, returns JSON string.
+    """
+    # Regex for code block: ```(json)? ... ```
+    match = re.search(r"```(?:json)?\s*(\{[\s\S]+?\})\s*```", content, re.IGNORECASE)
+    if match:
+        return match.group(1)
+    # Fallback: if no code block, try to find the first '{' and last '}'
+    first = content.find('{')
+    last = content.rfind('}')
+    if first != -1 and last != -1 and last > first:
+        return content[first:last+1]
+    # As last resort, return as is (will likely fail json.loads)
+    return content
+
+def generate_motivations_bulk(count: int):
+    """
+    Synchronously generates motivational messages from OpenRouter API.
+    Returns: {"easy": [...], "medium": [...], "hard": [...]}
     """
     prompt = (
         f"Придумай {count} легких, {count} средних и {count} жестких "
@@ -21,15 +35,30 @@ async def generate_motivations_bulk(count: int):
         "Ответ предоставь строго в следующем формате JSON: "
         "{\"easy\": [\"...\", ...], \"medium\": [\"...\", ...], \"hard\": [\"...\", ...]}"
     )
-    completion = client.chat.completions.create(
-        model=MODEL_NAME,
-        messages=[{"role": "user", "content": prompt}],
-    )
-    content = completion.choices[0].message.content
+    url = "https://openrouter.ai/api/v1/chat/completions"
+    headers = {
+        "Authorization": f"Bearer {OPENROUTER_API_KEY}",
+        "Content-Type": "application/json",
+        "HTTP-Referer": REFERER,
+        "X-Title": TITLE,
+    }
+    data = {
+        "model": MODEL_NAME,
+        "messages": [
+            {
+                "role": "user",
+                "content": prompt,
+            }
+        ],
+    }
     try:
-        result = json.loads(content)
+        response = requests.post(url, headers=headers, data=json.dumps(data))
+        response.raise_for_status()
+        content = response.json()["choices"][0]["message"]["content"]
+        json_str = extract_json_from_markdown(content)
+        result = json.loads(json_str)
         if all(k in result for k in ("easy", "medium", "hard")):
             return result
     except Exception as e:
-        print("LLM JSON parse error:", e)
+        print("LLM API error:", e)
     return {"easy": [], "medium": [], "hard": []}

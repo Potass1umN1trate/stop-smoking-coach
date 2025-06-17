@@ -16,9 +16,9 @@ TELEGRAM_TOKEN = os.environ.get('TELEGRAM_TOKEN')
 DB_FILE = "users.db"
 
 BUTTONS = [
-    ("Не убедительно", -1),
+    ("Не убедительно", +1),
     ("Заставляет задуматься", 0),
-    ("Воу-воу по-легче", +1),
+    ("Воу-воу по-легче", -1),
 ]
 
 def get_keyboard():
@@ -26,7 +26,7 @@ def get_keyboard():
         [InlineKeyboardButton(text, callback_data=str(delta)) for text, delta in BUTTONS]
     ])
 
-HARDNESS_LABELS = {0: "легкая", 1: "средняя", 2: "жесткая"}
+HARDNESS_LABELS = {0: "easy", 1: "medium", 2: "hard"}
 
 async def init_db():
     async with aiosqlite.connect(DB_FILE) as db:
@@ -130,7 +130,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
             count = (await cursor.fetchone())[0]
     if count == 0:
         # Generate 3*users messages (as only 1 user now, generate 3)
-        motivations = await generate_motivations_bulk(3)
+        motivations = await asyncio.get_event_loop().run_in_executor(None, generate_motivations_bulk, 3)
         await schedule_user_messages(user.id, motivations)
     # Send first message
     await send_next_motivation(user.id, context.bot)
@@ -177,21 +177,30 @@ async def scheduled_sender(app):
         if (now - last_dt).total_seconds() >= 8 * 3600:
             await send_next_motivation(user_id, app.bot)
 
-def main():
-    logging.basicConfig(level=logging.INFO)
-    loop = asyncio.get_event_loop()
-    loop.run_until_complete(init_db())
+async def async_main():
+    logging.basicConfig(level=logging.DEBUG)
+    await init_db()
 
     app = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CallbackQueryHandler(feedback_callback))
 
-    # Scheduler
     scheduler = AsyncIOScheduler()
     scheduler.add_job(scheduled_sender, "interval", hours=1, args=[app])
     scheduler.start()
 
-    app.run_polling()
+    # This manages the event loop itself; don't call asyncio.run()
+    await app.run_polling()
 
 if __name__ == "__main__":
-    main()
+    # In normal scripts, use:
+    # asyncio.run(async_main())
+    #
+    # BUT for ptb >=20, just:
+    import sys
+    if sys.platform == "win32":
+        asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
+    # And call directly:
+    import nest_asyncio
+    nest_asyncio.apply()
+    asyncio.get_event_loop().run_until_complete(async_main())
