@@ -4,9 +4,9 @@ import aiosqlite
 import asyncio
 import datetime
 import random
-from telegram import Update
+from telegram import Update, ReplyKeyboardMarkup, KeyboardButton
 from telegram.ext import (
-    ApplicationBuilder, CommandHandler, MessageHandler, filters, ContextTypes
+    ApplicationBuilder, CommandHandler, MessageHandler, filters, ContextTypes, ConversationHandler, ChatMemberHandler
 )
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from openrouter_llm import generate_motivation
@@ -16,6 +16,15 @@ DB_FILE = "users.db"
 
 CHECKIN_QUESTION = "Сделал ли ты сегодня шаги к своей цели? Ответь 'да' или 'нет'."
 VICTORY_MESSAGE = "Поздравляю! Ты достиг своей цели! 🎉"
+
+STATE_AWAIT_GOAL = 1
+
+MAIN_KEYBOARD = ReplyKeyboardMarkup(
+    [
+        [KeyboardButton("Сменить цель"), KeyboardButton("Удалить чат и все данные")]
+    ],
+    resize_keyboard=True
+)
 
 async def init_db():
     async with aiosqlite.connect(DB_FILE) as db:
@@ -69,21 +78,41 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "Я буду тебе помогать мотивацией!"
     )
 
-async def switch_theme(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text(
-        "Опиши новую цель или привычку, которую ты хочешь изменить."
-    )
-
 async def handle_goal(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
-    goal = update.message.text.strip()
-    if not goal:
+    text = update.message.text.strip().lower()
+
+    # Handle button "Сменить цель"
+    if text == "сменить цель":
+        await update.message.reply_text(
+            "Опиши новую цель или привычку, которую ты хочешь изменить.",
+            reply_markup=MAIN_KEYBOARD
+        )
+        context.user_data["awaiting_goal"] = True
         return
-    await set_goal(user, goal)
-    await update.message.reply_text(
-        f"Твоя цель сохранена!\nТеперь я буду регулярно отправлять тебе мотивационные сообщения."
-    )
-    await send_next_motivation(user.id, context.bot)
+
+    # Handle button "Удалить чат и все данные"
+    if text == "удалить чат и все данные":
+        await delete_user(user.id)
+        await update.message.reply_text(
+            "Все твои данные удалены. Чтобы начать заново — напиши новую цель.",
+            reply_markup=MAIN_KEYBOARD
+        )
+        context.user_data.clear()
+        return
+
+    # Set new goal if in goal-setting mode, or no goal yet
+    if context.user_data.get("awaiting_goal") or not (await get_user(user.id))[2]:
+        await set_goal(user, update.message.text.strip())
+        await update.message.reply_text(
+            "Твоя цель сохранена!\nТеперь я буду регулярно отправлять тебе мотивационные сообщения.",
+            reply_markup=MAIN_KEYBOARD
+        )
+        context.user_data["awaiting_goal"] = False
+        await send_next_motivation(user.id, context.bot)
+    else:
+        # Handle regular text (optionally)
+        pass
 
 async def send_next_motivation(user_id, bot):
     user = await get_user(user_id)
@@ -92,12 +121,11 @@ async def send_next_motivation(user_id, bot):
     goal = user[2]
     hardness = user[3]
     prompt = (
-        f"Замотивируй чтобы удовлетворить следующий запрос '{goal}'. "
-        f"Степень жесткости мотивации должна быть {hardness} из 21. Ответ предоставь в JSON."
+        f'''Замотивируй чтобы удовлетворить следующий запрос '{goal}'. Степень жесткости мотивации должна быть {hardness} из 21. Ответ предоставь в JSON в следующем формате {{"motivation":"..."}}'''
     )
     try:
         motivation = generate_motivation(prompt)
-        await bot.send_message(user_id, motivation)
+        await bot.send_message(user_id, motivation, reply_markup=MAIN_KEYBOARD)
         await update_last_sent(user_id)
     except Exception as e:
         logging.warning(f"Failed to send to {user_id}: {e}")
@@ -112,7 +140,7 @@ async def send_daily_checkin(user_id, bot):
         dt = datetime.datetime.fromisoformat(last_checkin)
         if (now - dt).total_seconds() < 23 * 3600:  # not yet 24h
             return
-    await bot.send_message(user_id, CHECKIN_QUESTION)
+    await bot.send_message(user_id, CHECKIN_QUESTION, reply_markup=MAIN_KEYBOARD)
     await update_last_checkin(user_id)
 
 async def check_and_send(bot):
@@ -142,23 +170,36 @@ async def handle_checkin(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if answer == "да":
         await update_hardness(user.id, -1)
         if hardness <= 1:
-            await update.message.reply_text(VICTORY_MESSAGE)
+            await update.message.reply_text(VICTORY_MESSAGE, reply_markup=MAIN_KEYBOARD)
         else:
-            await update.message.reply_text(f"Молодец! Продолжаем!")
+            await update.message.reply_text(f"Молодец! Продолжаем!", reply_markup=MAIN_KEYBOARD)
     elif answer == "нет":
         await update_hardness(user.id, +1)
-        await update.message.reply_text(f"Не сдавайся! Я с тобой.")
+        await update.message.reply_text(f"Не сдавайся! Я с тобой.", reply_markup=MAIN_KEYBOARD)
     await update_last_checkin(user.id)
 
+async def delete_user(user_id):
+    async with aiosqlite.connect(DB_FILE) as db:
+        await db.execute('DELETE FROM users WHERE user_id=?', (user_id,))
+        await db.commit()
+
+async def chat_member_update(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.my_chat_member and update.my_chat_member.chat.type == "private":
+        new_status = update.my_chat_member.new_chat_member.status
+        user_id = update.my_chat_member.chat.id
+        if new_status in ["kicked", "left"]:
+            await delete_user(user_id)
+            logging.info(f"User {user_id} removed the bot, deleted from DB.")
+
 async def async_main():
-    logging.basicConfig(level=logging.INFO)
+    logging.basicConfig(level=logging.DEBUG)
     await init_db()
 
     app = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
     app.add_handler(CommandHandler("start", start))
-    app.add_handler(CommandHandler("switch_theme", switch_theme))
     app.add_handler(MessageHandler(filters.TEXT & (~filters.COMMAND), handle_goal))
     app.add_handler(MessageHandler(filters.Regex("^(да|нет)$"), handle_checkin))
+    app.add_handler(ChatMemberHandler(chat_member_update, chat_member_types="my_chat_member"))
 
     scheduler = AsyncIOScheduler()
     scheduler.add_job(check_and_send, "interval", minutes=30, args=[app.bot])
