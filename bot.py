@@ -21,7 +21,7 @@ STATE_AWAIT_GOAL = 1
 
 MAIN_KEYBOARD = ReplyKeyboardMarkup(
     [
-        [KeyboardButton("Сменить цель"), KeyboardButton("Удалить чат и все данные")]
+        [KeyboardButton("Сменить цель")]
     ],
     resize_keyboard=True
 )
@@ -89,16 +89,6 @@ async def handle_goal(update: Update, context: ContextTypes.DEFAULT_TYPE):
             reply_markup=MAIN_KEYBOARD
         )
         context.user_data["awaiting_goal"] = True
-        return
-
-    # Handle button "Удалить чат и все данные"
-    if text == "удалить чат и все данные":
-        await delete_user(user.id)
-        await update.message.reply_text(
-            "Все твои данные удалены. Чтобы начать заново — напиши новую цель.",
-            reply_markup=MAIN_KEYBOARD
-        )
-        context.user_data.clear()
         return
 
     # Set new goal if in goal-setting mode, or no goal yet
