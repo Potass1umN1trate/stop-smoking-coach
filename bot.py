@@ -92,8 +92,7 @@ async def send_next_motivation(user_id, bot):
     goal = user[2]
     hardness = user[3]
     prompt = (
-        f"Замотивируй чтобы удовлетворить следующий запрос '{goal}'. "
-        f"Степень жесткости мотивации должна быть {hardness} из 21. Ответ предоставь в JSON."
+       f'''Замотивируй чтобы удовлетворить следующий запрос '{goal}'. Степень жесткости мотивации должна быть {hardness} из 21. Ответ предоставь в JSON в следующем формате {{"motivation":"..."}}'''
     )
     try:
         motivation = generate_motivation(prompt)
