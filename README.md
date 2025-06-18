@@ -78,4 +78,94 @@ pip install -r requirements.txt
 
 ---
 
-If you need deployment tips (Docker, Heroku, etc), more features, or want to tweak the logic, just ask!
+Here’s a production-ready **Dockerfile** and **docker-compose.yml** for Stop Smoking Coach bot.
+
+---
+
+## **1. Dockerfile**
+
+This setup uses a **slim Python image**, installs your dependencies, and sets up your bot for production use.
+
+```dockerfile
+# ---- Dockerfile ----
+FROM python:3.12-slim
+
+# Set working directory
+WORKDIR /app
+
+# System deps (optional but useful for pip, SSL, etc.)
+RUN apt-get update && apt-get install -y \
+    build-essential \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install Python dependencies
+COPY requirements.txt .
+RUN pip install --upgrade pip && pip install -r requirements.txt
+
+# Copy all source code
+COPY . .
+
+# Set environment variables for Python (UTF-8, no .pyc)
+ENV PYTHONUNBUFFERED=1 \
+    PYTHONDONTWRITEBYTECODE=1
+
+# Entrypoint: run your bot
+CMD ["python", "bot.py"]
+```
+
+---
+
+## **2. docker-compose.yml**
+
+Set up your bot service with required environment variables.
+Replace the `TELEGRAM_TOKEN` and `OPENROUTER_API_KEY` with your real keys or use Docker secrets for better security.
+
+```yaml
+version: '3.8'
+
+services:
+  bot:
+    build: .
+    container_name: stop-smoking-coach
+    restart: unless-stopped
+    environment:
+      TELEGRAM_TOKEN: "YOUR_TELEGRAM_BOT_TOKEN"
+      OPENROUTER_API_KEY: "YOUR_OPENROUTER_API_KEY"
+      # (optional) Set your site if you want for LLM ranking:
+      # REFERER: "https://yourdomain.com"
+      # TITLE: "StopSmokingCoach"
+    volumes:
+      - ./users.db:/app/users.db  # Persist the sqlite DB
+    # If you need logs outside the container:
+    #   - ./logs:/app/logs
+```
+
+---
+
+## **3. Usage:**
+
+* Place your `Dockerfile`, `docker-compose.yml`, `requirements.txt`, and all your `.py` files in the **same directory**.
+* Build and start the bot:
+
+```bash
+docker compose up --build -d
+```
+
+* Check logs:
+
+```bash
+docker compose logs -f
+```
+
+---
+
+## **Security notes:**
+
+* For production, use Docker **secrets** for your keys or pass them at runtime, not in plain YAML.
+* The database is persisted on your host via `volumes`, so bot restarts don't lose user data.
+
+---
+
+**Ready!**
+If you want to add more config, like logging, or want an example with Docker secrets—just say the word!
+

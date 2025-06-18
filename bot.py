@@ -153,7 +153,7 @@ async def send_next_motivation(user_id, bot):
     try:
         await bot.send_message(
             user_id,
-            f"[{HARDNESS_LABELS[hardness]} мотивация]\n\n{message}",
+            f"{message}",
             reply_markup=keyboard
         )
         await mark_message_sent(user_id, day)
