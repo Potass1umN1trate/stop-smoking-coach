@@ -30,6 +30,7 @@ form_router = Router()
 class GoalStates(StatesGroup):
     waiting_for_goal = State()
     goal_set = State()
+    сheckin = State()
 
 def get_checkin_keyboard():
     kb = ReplyKeyboardMarkup(
@@ -127,7 +128,7 @@ async def handle_goal(message: types.Message, state: FSMContext):
     await state.set_state(GoalStates.goal_set)
 
 @form_router.message(
-    GoalStates.goal_set,
+    GoalStates.checkin,
     lambda m: m.text and m.text.lower() in ["да", "нет"]
 )
 async def handle_checkin(message: types.Message, state: FSMContext):
@@ -145,9 +146,12 @@ async def handle_checkin(message: types.Message, state: FSMContext):
             await state.set_state(GoalStates.waiting_for_goal)  # optionally reset to new goal
         else:
             await message.answer(f"Молодец! Продолжаем!", reply_markup=ReplyKeyboardRemove())
+            await state.set_state(GoalStates.goal_set)
     elif answer == "нет":
         await update_hardness(user.id, +3)
         await message.answer(f"Не сдавайся! Я с тобой.", reply_markup=ReplyKeyboardRemove())
+        await state.set_state(GoalStates.goal_set)
+    
     await update_last_checkin(user.id)
 
 async def send_next_motivation(user_id, bot):
@@ -166,7 +170,8 @@ async def send_next_motivation(user_id, bot):
     except Exception as e:
         logging.warning(f"Failed to send to {user_id}: {e}")
 
-async def send_daily_checkin(user_id, bot):
+@form_router.message(GoalStates.goal_set)
+async def send_daily_checkin(user_id, bot, state: FSMContext):
     user = await get_user(user_id)
     if not user or not user[2]:
         return
@@ -176,6 +181,7 @@ async def send_daily_checkin(user_id, bot):
         dt = datetime.datetime.fromisoformat(last_checkin)
         if (now - dt).total_seconds() < 23 * 3600:  # not yet 24h
             return
+    await state.set_state(GoalStates.сheckin)
     await bot.send_message(
         user_id, 
         CHECKIN_QUESTION,
