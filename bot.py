@@ -146,7 +146,7 @@ async def handle_checkin(message: types.Message, state: FSMContext):
         else:
             await message.answer(f"Молодец! Продолжаем!", reply_markup=ReplyKeyboardRemove())
     elif answer == "нет":
-        await update_hardness(user.id, +1)
+        await update_hardness(user.id, +3)
         await message.answer(f"Не сдавайся! Я с тобой.", reply_markup=ReplyKeyboardRemove())
     await update_last_checkin(user.id)
 
