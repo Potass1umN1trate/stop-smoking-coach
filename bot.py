@@ -4,7 +4,7 @@ import aiosqlite
 import asyncio
 import datetime
 import random
-from telegram import Update
+from telegram import Update, ReplyKeyboardMarkup
 from telegram.ext import (
     ApplicationBuilder, CommandHandler, MessageHandler, filters, ContextTypes
 )
@@ -16,6 +16,7 @@ DB_FILE = "users.db"
 
 CHECKIN_QUESTION = "Сделал ли ты сегодня шаги к своей цели? Ответь 'да' или 'нет'."
 VICTORY_MESSAGE = "Поздравляю! Ты достиг своей цели! 🎉"
+NEW_GOAL_BUTTON = "Новая цель"
 
 async def init_db():
     async with aiosqlite.connect(DB_FILE) as db:
@@ -64,9 +65,11 @@ async def update_last_checkin(user_id):
         await db.commit()
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    reply_markup = ReplyKeyboardMarkup([[NEW_GOAL_BUTTON]], resize_keyboard=True)
     await update.message.reply_text(
         "Привет! Напиши свою цель или привычку, которую хочешь внедрить или убрать. "
-        "Я буду тебе помогать мотивацией!"
+        "Я буду тебе помогать мотивацией!",
+        reply_markup=reply_markup
     )
 
 async def switch_theme(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -77,11 +80,13 @@ async def switch_theme(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def handle_goal(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     goal = update.message.text.strip()
-    if not goal:
+    if not goal or goal == NEW_GOAL_BUTTON:
         return
     await set_goal(user, goal)
+    reply_markup = ReplyKeyboardMarkup([[NEW_GOAL_BUTTON]], resize_keyboard=True)
     await update.message.reply_text(
-        f"Твоя цель сохранена!\nТеперь я буду регулярно отправлять тебе мотивационные сообщения."
+        f"Твоя цель сохранена!\nТеперь я буду регулярно отправлять тебе мотивационные сообщения.",
+        reply_markup=reply_markup
     )
     await send_next_motivation(user.id, context.bot)
 
@@ -96,7 +101,8 @@ async def send_next_motivation(user_id, bot):
     )
     try:
         motivation = generate_motivation(prompt)
-        await bot.send_message(user_id, motivation)
+        reply_markup = ReplyKeyboardMarkup([[NEW_GOAL_BUTTON]], resize_keyboard=True)
+        await bot.send_message(user_id, motivation, reply_markup=reply_markup)
         await update_last_sent(user_id)
     except Exception as e:
         logging.warning(f"Failed to send to {user_id}: {e}")
@@ -150,13 +156,14 @@ async def handle_checkin(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update_last_checkin(user.id)
 
 async def async_main():
-    logging.basicConfig(level=logging.INFO)
+    logging.basicConfig(level=logging.DEBUG)
     await init_db()
 
     app = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("switch_theme", switch_theme))
-    app.add_handler(MessageHandler(filters.TEXT & (~filters.COMMAND), handle_goal))
+    app.add_handler(MessageHandler(filters.TEXT & (~filters.COMMAND) & (~filters.Regex(f"^{NEW_GOAL_BUTTON}$")), handle_goal))
+    app.add_handler(MessageHandler(filters.Regex(f"^{NEW_GOAL_BUTTON}$"), switch_theme))
     app.add_handler(MessageHandler(filters.Regex("^(да|нет)$"), handle_checkin))
 
     scheduler = AsyncIOScheduler()
