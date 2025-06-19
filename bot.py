@@ -4,10 +4,12 @@ import aiosqlite
 import asyncio
 import datetime
 import random
-from aiogram import Bot, Dispatcher, types
-from aiogram.types import ReplyKeyboardMarkup, KeyboardButton
-from aiogram.filters import Command
+from aiogram import Bot, Dispatcher, types, Router
+from aiogram.types import ReplyKeyboardMarkup, ReplyKeyboardRemove, KeyboardButton, Message
+from aiogram.filters import Command, CommandStart, BaseFilter
 from aiogram.utils.keyboard import ReplyKeyboardBuilder
+from aiogram.fsm.state import StatesGroup, State
+from aiogram.fsm.context import FSMContext
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from openrouter_llm import generate_motivation
 
@@ -17,6 +19,28 @@ DB_FILE = "users.db"
 CHECKIN_QUESTION = "Сделал ли ты сегодня шаги к своей цели? Ответь 'да' или 'нет'."
 VICTORY_MESSAGE = "Поздравляю! Ты достиг своей цели! 🎉"
 NEW_GOAL_BUTTON = "Новая цель"
+
+form_router = Router()
+
+# class IsInitializedFilter(BaseFilter):
+#     async def __call__(self, message: Message) -> bool:
+#         user = await get_user(message.from_user.id)
+#         return user is not None and user[2] is not None
+
+class GoalStates(StatesGroup):
+    waiting_for_goal = State()
+    goal_set = State()
+
+def get_checkin_keyboard():
+    kb = ReplyKeyboardMarkup(
+        keyboard=[
+            [KeyboardButton(text="Да"), KeyboardButton(text="Нет")]
+        ],
+        resize_keyboard=True,
+        one_time_keyboard=True,
+        input_field_placeholder="Выбери вариант"
+    )
+    return kb
 
 async def init_db():
     async with aiosqlite.connect(DB_FILE) as db:
@@ -71,19 +95,25 @@ def get_goal_keyboard():
     )
     return kb
 
-async def cmd_start(message: types.Message):
+
+@form_router.message(CommandStart())
+async def cmd_start(message: types.Message, state: FSMContext):
+    await state.set_state(GoalStates.waiting_for_goal)
     await message.answer(
         "Привет! Напиши свою цель или привычку, которую хочешь внедрить или убрать. "
         "Я буду тебе помогать мотивацией!",
         reply_markup=get_goal_keyboard()
     )
 
-async def switch_theme(message: types.Message):
+@form_router.message(lambda m: m.text == NEW_GOAL_BUTTON)
+async def switch_theme(message: types.Message, state: FSMContext):
+    await state.set_state(GoalStates.waiting_for_goal)
     await message.answer(
         "Опиши новую цель или привычку, которую ты хочешь изменить."
     )
 
-async def handle_goal(message: types.Message):
+@form_router.message(GoalStates.waiting_for_goal)
+async def handle_goal(message: types.Message, state: FSMContext):
     user = message.from_user
     goal = message.text.strip()
     if not goal or goal == NEW_GOAL_BUTTON:
@@ -94,6 +124,31 @@ async def handle_goal(message: types.Message):
         reply_markup=get_goal_keyboard()
     )
     await send_next_motivation(user.id, message.bot)
+    await state.set_state(GoalStates.goal_set)
+
+@form_router.message(
+    GoalStates.goal_set,
+    lambda m: m.text and m.text.lower() in ["да", "нет"]
+)
+async def handle_checkin(message: types.Message, state: FSMContext):
+    user = message.from_user
+    answer = message.text.lower().strip()
+    user_row = await get_user(user.id)
+    if not user_row or not user_row[2]:
+        return
+    hardness = user_row[3]
+    if answer == "да":
+        await update_hardness(user.id, -1)
+        if hardness <= 1:
+            await message.answer(VICTORY_MESSAGE, reply_markup=ReplyKeyboardRemove())
+            await set_goal(user, None)  # Clear goal
+            await state.set_state(GoalStates.waiting_for_goal)  # optionally reset to new goal
+        else:
+            await message.answer(f"Молодец! Продолжаем!", reply_markup=ReplyKeyboardRemove())
+    elif answer == "нет":
+        await update_hardness(user.id, +1)
+        await message.answer(f"Не сдавайся! Я с тобой.", reply_markup=ReplyKeyboardRemove())
+    await update_last_checkin(user.id)
 
 async def send_next_motivation(user_id, bot):
     user = await get_user(user_id)
@@ -121,7 +176,11 @@ async def send_daily_checkin(user_id, bot):
         dt = datetime.datetime.fromisoformat(last_checkin)
         if (now - dt).total_seconds() < 23 * 3600:  # not yet 24h
             return
-    await bot.send_message(user_id, CHECKIN_QUESTION)
+    await bot.send_message(
+        user_id, 
+        CHECKIN_QUESTION,
+        reply_markup=get_checkin_keyboard()
+    )
     await update_last_checkin(user_id)
 
 async def check_and_send(bot):
@@ -141,34 +200,18 @@ async def check_and_send(bot):
             await send_next_motivation(user_id, bot)
         await send_daily_checkin(user_id, bot)
 
-async def handle_checkin(message: types.Message):
-    user = message.from_user
-    answer = message.text.lower().strip()
-    user_row = await get_user(user.id)
-    if not user_row or not user_row[2]:
-        return
-    hardness = user_row[3]
-    if answer == "да":
-        await update_hardness(user.id, -1)
-        if hardness <= 1:
-            await message.answer(VICTORY_MESSAGE)
-        else:
-            await message.answer(f"Молодец! Продолжаем!")
-    elif answer == "нет":
-        await update_hardness(user.id, +1)
-        await message.answer(f"Не сдавайся! Я с тобой.")
-    await update_last_checkin(user.id)
-
 async def main():
     logging.basicConfig(level=logging.DEBUG)
     await init_db()
     bot = Bot(token=TELEGRAM_TOKEN)
     dp = Dispatcher()
 
-    dp.message.register(cmd_start, Command(commands=["start"]))
-    dp.message.register(switch_theme, lambda m: m.text == NEW_GOAL_BUTTON)
-    dp.message.register(handle_goal, lambda m: m.text and m.text not in [NEW_GOAL_BUTTON, "да", "нет"] and not m.text.startswith('/'))
-    dp.message.register(handle_checkin, lambda m: m.text in ["да", "нет"])
+    dp.include_router(form_router)
+
+    # dp.message.register(cmd_start, Command(commands=["start"]))
+    # dp.message.register(switch_theme, lambda m: m.text == NEW_GOAL_BUTTON)
+    # dp.message.register(handle_goal, lambda m: m.text and m.text not in [NEW_GOAL_BUTTON, "да", "нет"] and not m.text.startswith('/'))
+    # dp.message.register(handle_checkin, lambda m: m.text in ["да", "нет"])
 
     scheduler = AsyncIOScheduler()
     scheduler.add_job(check_and_send, "interval", minutes=30, args=[bot])
