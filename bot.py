@@ -30,7 +30,7 @@ form_router = Router()
 class GoalStates(StatesGroup):
     waiting_for_goal = State()
     goal_set = State()
-    сheckin = State()
+    checkin = State()
 
 def get_checkin_keyboard():
     kb = ReplyKeyboardMarkup(
@@ -181,12 +181,12 @@ async def send_daily_checkin(user_id, bot, state: FSMContext):
         dt = datetime.datetime.fromisoformat(last_checkin)
         if (now - dt).total_seconds() < 23 * 3600:  # not yet 24h
             return
-    await state.set_state(GoalStates.сheckin)
     await bot.send_message(
         user_id, 
         CHECKIN_QUESTION,
         reply_markup=get_checkin_keyboard()
     )
+    await state.set_state(GoalStates.checkin)
     await update_last_checkin(user_id)
 
 async def check_and_send(bot):
