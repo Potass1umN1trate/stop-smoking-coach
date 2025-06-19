@@ -4,10 +4,10 @@ import aiosqlite
 import asyncio
 import datetime
 import random
-from telegram import Update, ReplyKeyboardMarkup
-from telegram.ext import (
-    ApplicationBuilder, CommandHandler, MessageHandler, filters, ContextTypes
-)
+from aiogram import Bot, Dispatcher, types
+from aiogram.types import ReplyKeyboardMarkup, KeyboardButton
+from aiogram.filters import Command
+from aiogram.utils.keyboard import ReplyKeyboardBuilder
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from openrouter_llm import generate_motivation
 
@@ -64,31 +64,36 @@ async def update_last_checkin(user_id):
         await db.execute('UPDATE users SET last_checkin = ? WHERE user_id = ?', (now, user_id))
         await db.commit()
 
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    reply_markup = ReplyKeyboardMarkup([[NEW_GOAL_BUTTON]], resize_keyboard=True)
-    await update.message.reply_text(
+def get_goal_keyboard():
+    kb = ReplyKeyboardMarkup(
+        keyboard=[[KeyboardButton(text=NEW_GOAL_BUTTON)]],
+        resize_keyboard=True
+    )
+    return kb
+
+async def cmd_start(message: types.Message):
+    await message.answer(
         "Привет! Напиши свою цель или привычку, которую хочешь внедрить или убрать. "
         "Я буду тебе помогать мотивацией!",
-        reply_markup=reply_markup
+        reply_markup=get_goal_keyboard()
     )
 
-async def switch_theme(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text(
+async def switch_theme(message: types.Message):
+    await message.answer(
         "Опиши новую цель или привычку, которую ты хочешь изменить."
     )
 
-async def handle_goal(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user = update.effective_user
-    goal = update.message.text.strip()
+async def handle_goal(message: types.Message):
+    user = message.from_user
+    goal = message.text.strip()
     if not goal or goal == NEW_GOAL_BUTTON:
         return
     await set_goal(user, goal)
-    reply_markup = ReplyKeyboardMarkup([[NEW_GOAL_BUTTON]], resize_keyboard=True)
-    await update.message.reply_text(
+    await message.answer(
         f"Твоя цель сохранена!\nТеперь я буду регулярно отправлять тебе мотивационные сообщения.",
-        reply_markup=reply_markup
+        reply_markup=get_goal_keyboard()
     )
-    await send_next_motivation(user.id, context.bot)
+    await send_next_motivation(user.id, message.bot)
 
 async def send_next_motivation(user_id, bot):
     user = await get_user(user_id)
@@ -97,12 +102,11 @@ async def send_next_motivation(user_id, bot):
     goal = user[2]
     hardness = user[3]
     prompt = (
-       f'''Замотивируй чтобы удовлетворить следующий запрос '{goal}'. Степень жесткости мотивации должна быть {hardness} из 21. Ответ предоставь в JSON в следующем формате {{"motivation":"..."}}'''
+       f'''Замотивируй чтобы удовлетворить следующий запрос '{goal}'. Степень жесткости мотивации должна быть {hardness} из 21. Ответ предоставь в JSON в следующем формате {{"motivation":"<текст мотивации на русском языке>"}}.'''
     )
     try:
         motivation = generate_motivation(prompt)
-        reply_markup = ReplyKeyboardMarkup([[NEW_GOAL_BUTTON]], resize_keyboard=True)
-        await bot.send_message(user_id, motivation, reply_markup=reply_markup)
+        await bot.send_message(user_id, motivation, reply_markup=get_goal_keyboard())
         await update_last_sent(user_id)
     except Exception as e:
         logging.warning(f"Failed to send to {user_id}: {e}")
@@ -137,9 +141,9 @@ async def check_and_send(bot):
             await send_next_motivation(user_id, bot)
         await send_daily_checkin(user_id, bot)
 
-async def handle_checkin(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user = update.effective_user
-    answer = update.message.text.lower().strip()
+async def handle_checkin(message: types.Message):
+    user = message.from_user
+    answer = message.text.lower().strip()
     user_row = await get_user(user.id)
     if not user_row or not user_row[2]:
         return
@@ -147,34 +151,30 @@ async def handle_checkin(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if answer == "да":
         await update_hardness(user.id, -1)
         if hardness <= 1:
-            await update.message.reply_text(VICTORY_MESSAGE)
+            await message.answer(VICTORY_MESSAGE)
         else:
-            await update.message.reply_text(f"Молодец! Продолжаем!")
+            await message.answer(f"Молодец! Продолжаем!")
     elif answer == "нет":
         await update_hardness(user.id, +1)
-        await update.message.reply_text(f"Не сдавайся! Я с тобой.")
+        await message.answer(f"Не сдавайся! Я с тобой.")
     await update_last_checkin(user.id)
 
-async def async_main():
+async def main():
     logging.basicConfig(level=logging.DEBUG)
     await init_db()
+    bot = Bot(token=TELEGRAM_TOKEN)
+    dp = Dispatcher()
 
-    app = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
-    app.add_handler(CommandHandler("start", start))
-    app.add_handler(CommandHandler("switch_theme", switch_theme))
-    app.add_handler(MessageHandler(filters.TEXT & (~filters.COMMAND) & (~filters.Regex(f"^{NEW_GOAL_BUTTON}$")), handle_goal))
-    app.add_handler(MessageHandler(filters.Regex(f"^{NEW_GOAL_BUTTON}$"), switch_theme))
-    app.add_handler(MessageHandler(filters.Regex("^(да|нет)$"), handle_checkin))
+    dp.message.register(cmd_start, Command(commands=["start"]))
+    dp.message.register(switch_theme, lambda m: m.text == NEW_GOAL_BUTTON)
+    dp.message.register(handle_goal, lambda m: m.text and m.text not in [NEW_GOAL_BUTTON, "да", "нет"] and not m.text.startswith('/'))
+    dp.message.register(handle_checkin, lambda m: m.text in ["да", "нет"])
 
     scheduler = AsyncIOScheduler()
-    scheduler.add_job(check_and_send, "interval", minutes=30, args=[app.bot])
+    scheduler.add_job(check_and_send, "interval", minutes=30, args=[bot])
     scheduler.start()
-    await app.run_polling()
+
+    await dp.start_polling(bot)
 
 if __name__ == "__main__":
-    import sys
-    if sys.platform == "win32":
-        asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
-    import nest_asyncio
-    nest_asyncio.apply()
-    asyncio.get_event_loop().run_until_complete(async_main())
+    asyncio.run(main())
