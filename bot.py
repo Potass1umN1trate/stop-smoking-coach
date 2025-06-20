@@ -128,7 +128,7 @@ async def handle_goal(message: types.Message, state: FSMContext):
     await state.set_state(GoalStates.goal_set)
 
 @form_router.message(
-    GoalStates.checkin,
+    # GoalStates.checkin,
     lambda m: m.text and m.text.lower() in ["да", "нет"]
 )
 async def handle_checkin(message: types.Message, state: FSMContext):
@@ -170,8 +170,7 @@ async def send_next_motivation(user_id, bot):
     except Exception as e:
         logging.warning(f"Failed to send to {user_id}: {e}")
 
-@form_router.message(GoalStates.goal_set)
-async def send_daily_checkin(user_id, bot, state: FSMContext):
+async def send_daily_checkin(user_id, bot):
     user = await get_user(user_id)
     if not user or not user[2]:
         return
@@ -186,7 +185,6 @@ async def send_daily_checkin(user_id, bot, state: FSMContext):
         CHECKIN_QUESTION,
         reply_markup=get_checkin_keyboard()
     )
-    await state.set_state(GoalStates.checkin)
     await update_last_checkin(user_id)
 
 async def check_and_send(bot):
