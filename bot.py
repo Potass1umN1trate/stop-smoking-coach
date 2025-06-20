@@ -152,6 +152,9 @@ async def handle_feedback(query: types.CallbackQuery):
     else:
         await query.answer("Рад, что помогает 💡", show_alert=True)
 
+    # ❌ Remove inline keyboard after answer
+    await query.message.edit_reply_markup(reply_markup=None)
+
 @form_router.callback_query(lambda c: c.data and c.data.startswith("checkin:"))
 async def handle_checkin(query: types.CallbackQuery, state: FSMContext):
     user = query.from_user
