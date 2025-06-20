@@ -48,9 +48,6 @@ def get_combined_inline_keyboard():
             [
                 InlineKeyboardButton(text="🤦‍♂️ Фигню сказал", callback_data="feedback:bad"),
                 InlineKeyboardButton(text="🧠 Заставляет задуматься", callback_data="feedback:good"),
-            ],
-            [
-                InlineKeyboardButton(text="🎯 Новая цель", callback_data="new_goal"),
             ]
         ]
     )
@@ -124,11 +121,11 @@ async def switch_theme(message: types.Message, state: FSMContext):
         "Опиши новую цель или привычку, которую ты хочешь изменить."
     )
 
-@form_router.callback_query(lambda c: c.data == "new_goal")
-async def handle_new_goal_button(query: types.CallbackQuery, state: FSMContext):
-    await state.set_state(GoalStates.waiting_for_goal)
-    await query.message.answer("Опиши новую цель или привычку, которую ты хочешь изменить.")
-    await query.answer()
+# @form_router.callback_query(lambda c: c.data == "new_goal")
+# async def handle_new_goal_button(query: types.CallbackQuery, state: FSMContext):
+#     await state.set_state(GoalStates.waiting_for_goal)
+#     await query.message.answer("Опиши новую цель или привычку, которую ты хочешь изменить.")
+#     await query.answer()
 
 @form_router.message(GoalStates.waiting_for_goal)
 async def handle_goal(message: types.Message, state: FSMContext):
@@ -151,9 +148,9 @@ async def handle_feedback(query: types.CallbackQuery):
     
     if feedback == "bad":
         await update_hardness(user.id, +1)
-        await query.answer("Учту! Повышаю мотивационную жесткость 💪", show_alert=True, reply_markup=get_goal_keyboard())
+        await query.answer("Учту! Повышаю мотивационную жесткость 💪", show_alert=True)
     else:
-        await query.answer("Рад, что помогает 💡", show_alert=True, reply_markup=get_goal_keyboard())
+        await query.answer("Рад, что помогает 💡", show_alert=True)
 
 @form_router.callback_query(lambda c: c.data and c.data.startswith("checkin:"))
 async def handle_checkin(query: types.CallbackQuery, state: FSMContext):
