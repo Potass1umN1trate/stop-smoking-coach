@@ -5,7 +5,7 @@ import asyncio
 import datetime
 import random
 from aiogram import Bot, Dispatcher, types, Router
-from aiogram.types import ReplyKeyboardMarkup, ReplyKeyboardRemove, KeyboardButton, Message
+from aiogram.types import ReplyKeyboardMarkup, ReplyKeyboardRemove, InlineKeyboardMarkup, InlineKeyboardButton, KeyboardButton, Message
 from aiogram.filters import Command, CommandStart, BaseFilter
 from aiogram.utils.keyboard import ReplyKeyboardBuilder
 from aiogram.fsm.state import StatesGroup, State
@@ -32,17 +32,28 @@ class GoalStates(StatesGroup):
     goal_set = State()
     checkin = State()
 
-def get_checkin_keyboard():
-    kb = ReplyKeyboardMarkup(
-        keyboard=[
-            [KeyboardButton(text="Да"), KeyboardButton(text="Нет")]
-        ],
-        resize_keyboard=True,
-        one_time_keyboard=True,
-        input_field_placeholder="Выбери вариант"
+def get_checkin_inline_keyboard():
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(text="✅ Да", callback_data="checkin:yes"),
+                InlineKeyboardButton(text="❌ Нет", callback_data="checkin:no"),
+            ]
+        ]
     )
-    return kb
 
+def get_combined_inline_keyboard():
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(text="🤦‍♂️ Фигню сказал", callback_data="feedback:bad"),
+                InlineKeyboardButton(text="🧠 Заставляет задуматься", callback_data="feedback:good"),
+            ],
+            [
+                InlineKeyboardButton(text="🎯 Новая цель", callback_data="new_goal"),
+            ]
+        ]
+    )
 async def init_db():
     async with aiosqlite.connect(DB_FILE) as db:
         await db.execute('''
@@ -113,6 +124,12 @@ async def switch_theme(message: types.Message, state: FSMContext):
         "Опиши новую цель или привычку, которую ты хочешь изменить."
     )
 
+@form_router.callback_query(lambda c: c.data == "new_goal")
+async def handle_new_goal_button(query: types.CallbackQuery, state: FSMContext):
+    await state.set_state(GoalStates.waiting_for_goal)
+    await query.message.answer("Опиши новую цель или привычку, которую ты хочешь изменить.")
+    await query.answer()
+
 @form_router.message(GoalStates.waiting_for_goal)
 async def handle_goal(message: types.Message, state: FSMContext):
     user = message.from_user
@@ -127,32 +144,43 @@ async def handle_goal(message: types.Message, state: FSMContext):
     await send_next_motivation(user.id, message.bot)
     await state.set_state(GoalStates.goal_set)
 
-@form_router.message(
-    # GoalStates.checkin,
-    lambda m: m.text and m.text.lower() in ["да", "нет"]
-)
-async def handle_checkin(message: types.Message, state: FSMContext):
-    user = message.from_user
-    answer = message.text.lower().strip()
+@form_router.callback_query(lambda c: c.data and c.data.startswith("feedback:"))
+async def handle_feedback(query: types.CallbackQuery):
+    user = query.from_user
+    feedback = query.data.split(":")[1]
+    
+    if feedback == "bad":
+        await update_hardness(user.id, +1)
+        await query.answer("Учту! Повышаю мотивационную жесткость 💪", show_alert=True, reply_markup=get_goal_keyboard())
+    else:
+        await query.answer("Рад, что помогает 💡", show_alert=True, reply_markup=get_goal_keyboard())
+
+@form_router.callback_query(lambda c: c.data and c.data.startswith("checkin:"))
+async def handle_checkin(query: types.CallbackQuery, state: FSMContext):
+    user = query.from_user
+    action = query.data.split(":")[1]  # "yes" or "no"
     user_row = await get_user(user.id)
     if not user_row or not user_row[2]:
+        await query.answer("Сначала установи цель с помощью /start или /новая_цель.")
         return
+    
     hardness = user_row[3]
-    if answer == "да":
+    if action == "yes":
         await update_hardness(user.id, -1)
         if hardness <= 1:
-            await message.answer(VICTORY_MESSAGE, reply_markup=ReplyKeyboardRemove())
+            await query.message.edit_text(VICTORY_MESSAGE)
             await set_goal(user, None)  # Clear goal
             await state.set_state(GoalStates.waiting_for_goal)  # optionally reset to new goal
         else:
-            await message.answer(f"Молодец! Продолжаем!", reply_markup=ReplyKeyboardRemove())
+            await query.message.edit_text("Молодец! Продолжаем!")
             await state.set_state(GoalStates.goal_set)
-    elif answer == "нет":
+    elif action == "no":
         await update_hardness(user.id, +3)
-        await message.answer(f"Не сдавайся! Я с тобой.", reply_markup=ReplyKeyboardRemove())
+        await query.message.edit_text("Не сдавайся! Я с тобой.")
         await state.set_state(GoalStates.goal_set)
     
     await update_last_checkin(user.id)
+    await query.answer()
 
 async def send_next_motivation(user_id, bot):
     user = await get_user(user_id)
@@ -161,11 +189,15 @@ async def send_next_motivation(user_id, bot):
     goal = user[2]
     hardness = user[3]
     prompt = (
-       f'''Замотивируй чтобы удовлетворить следующий запрос '{goal}'. Степень жесткости мотивации должна быть {hardness} из 21. Ответ предоставь в JSON в следующем формате {{"motivation":"<текст мотивации на русском языке>"}}.'''
+       f'''Дай один мотивационный совет, чтобы достичь следующей цели:"{goal}". Степень жесткости мотивации должна быть {hardness} из 21. Ответ предоставь в JSON в следующем формате {{"motivation":"<текст мотивации на русском языке>"}}.'''
     )
     try:
         motivation = generate_motivation(prompt)
-        await bot.send_message(user_id, motivation, reply_markup=get_goal_keyboard())
+        await bot.send_message(
+            user_id, 
+            motivation, 
+            reply_markup=get_combined_inline_keyboard()
+        )
         await update_last_sent(user_id)
     except Exception as e:
         logging.warning(f"Failed to send to {user_id}: {e}")
@@ -178,12 +210,12 @@ async def send_daily_checkin(user_id, bot):
     now = datetime.datetime.utcnow()
     if last_checkin:
         dt = datetime.datetime.fromisoformat(last_checkin)
-        if (now - dt).total_seconds() < 23 * 3600:  # not yet 24h
+        if (now - dt).total_seconds() < 23 * 1800:  # not yet 24h
             return
     await bot.send_message(
         user_id, 
         CHECKIN_QUESTION,
-        reply_markup=get_checkin_keyboard()
+        reply_markup=get_checkin_inline_keyboard()
     )
     await update_last_checkin(user_id)
 
