@@ -28,6 +28,8 @@ def generate_motivation(prompt: str) -> str:
     }
     data = {
         "model": MODEL_NAME,
+        "temperature": 1.4,
+        # "frequency_penalty": 1.3,
         "messages": [
             {
                 "role": "user",
