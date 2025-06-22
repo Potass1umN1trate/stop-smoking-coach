@@ -48,3 +48,9 @@ def generate_motivation(prompt: str) -> str:
         print("LLM API error:", e)
         return "Не удалось получить мотивационное сообщение. Попробуй позже."
 
+if __name__ == "__main__":
+    # Simple test for manual run
+    test_prompt = '''Дай один мотивационный совет, чтобы достичь следующей цели:"Я хочу сделать 100 отжиманий за раз.". Степень жесткости мотивации должна быть 10 из 21. Ответ предоставь в JSON в следующем формате {"motivation":"<текст мотивации на русском языке>"}.'''
+    print("Prompt:", test_prompt)
+    print("Motivation:", generate_motivation(test_prompt))
+
