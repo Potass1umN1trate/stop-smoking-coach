@@ -4,3 +4,4 @@ apscheduler
 aiosqlite
 nest_asyncio
 requests
+urllib3>=2.6.3 # not directly required, pinned by Snyk to avoid a vulnerability
